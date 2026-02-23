@@ -1,0 +1,122 @@
+{
+  "mode": "Folder (Root)",
+  "merge_mode": true,
+  "flatten_paths": true,
+  "ignore_list": [
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    ".vscode",
+    ".idea",
+    "coverage",
+    "__pycache__",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    ".DS_Store",
+    ".env",
+    ".env.local"
+  ],
+  "remove_comments": false,
+  "remove_empty_lines": false,
+  "fix_indent": false,
+  "forced_includes": [
+    {
+      "path": "D:/projects/ZHOSKO/pyproject.toml",
+      "add_txt": true,
+      "use_full_path": true,
+      "allow_merge": true
+    },
+    {
+      "path": "D:/projects/ZHOSKO/main.py",
+      "add_txt": true,
+      "use_full_path": true,
+      "allow_merge": true
+    }
+  ],
+  "forced_excludes": [],
+  "folder_configs": {
+    "ai_context_export": {
+      "ext_map": {
+        ".ts": true,
+        ".js": true,
+        ".tsx": true,
+        ".jsx": true,
+        ".vue": true,
+        ".py": true,
+        ".rs": true,
+        ".java": true,
+        ".c": true,
+        ".cpp": true,
+        ".h": true,
+        ".json": false,
+        ".css": false,
+        ".html": false,
+        ".md": false,
+        ".txt": false
+      }
+    },
+    "assets": {
+      "ext_map": {
+        ".ts": true,
+        ".js": true,
+        ".tsx": true,
+        ".jsx": true,
+        ".vue": true,
+        ".py": true,
+        ".rs": true,
+        ".java": true,
+        ".c": true,
+        ".cpp": true,
+        ".h": true,
+        ".json": false,
+        ".css": false,
+        ".html": false,
+        ".md": false,
+        ".txt": false
+      }
+    },
+    "src": {
+      "ext_map": {
+        ".ts": true,
+        ".js": true,
+        ".tsx": true,
+        ".jsx": true,
+        ".vue": true,
+        ".py": true,
+        ".rs": true,
+        ".java": true,
+        ".c": true,
+        ".cpp": true,
+        ".h": true,
+        ".json": false,
+        ".css": false,
+        ".html": false,
+        ".md": false,
+        ".txt": false
+      }
+    },
+    "tools": {
+      "ext_map": {
+        ".ts": true,
+        ".js": true,
+        ".tsx": true,
+        ".jsx": true,
+        ".vue": true,
+        ".py": true,
+        ".rs": true,
+        ".java": true,
+        ".c": true,
+        ".cpp": true,
+        ".h": true,
+        ".json": false,
+        ".css": false,
+        ".html": false,
+        ".md": false,
+        ".txt": false
+      }
+    }
+  }
+}

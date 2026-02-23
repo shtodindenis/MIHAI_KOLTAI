@@ -1,0 +1,25 @@
+{
+    "atlas_test": {
+        "atlas": "test.png",
+        "config": "test.json",
+        "scale": 0.5,
+        "auto_build": true,
+        "sprites": {
+            "ppl4.png": "Rapestain"
+        },
+        "custom": "test"
+    },
+    "mobile": {
+        "atlas": "mobile_atlas.png",
+        "config": "mobile_atlas.json",
+        "scale": 1,
+        "auto_build": true,
+        "sprites": {
+            "telefon1.png": "telefon_body",
+            "telefon2.png": "SCREEN_OFF",
+            "blackscr.png": "SCREEN_BLACK",
+            "BG.png": "SCREEN_ON"
+        },
+        "custom": "mobile"
+    }
+}
