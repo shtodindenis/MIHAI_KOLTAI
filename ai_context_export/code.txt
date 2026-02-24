@@ -7,916 +7,994 @@ FILE: src\__init__.py
 ------------------------------------------------------------
 FILE: src\components\__init__.py
 ------------------------------------------------------------
-
-------------------------------------------------------------
-
-------------------------------------------------------------
-FILE: src\components\phone\phone.py
-------------------------------------------------------------
-"""Phone component with state management and boot logic."""
-
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
-
 import arcade
-from PIL import Image, ImageEnhance
 
 from src.shared.constants import SCREEN_HEIGHT, SCREEN_WIDTH
 from src.states.phone import PhoneData, PhoneState
+from src.components.phone.layout import PhoneLayout
+from src.components.phone.home import PhoneHome
 
 if TYPE_CHECKING:
-    from src.components.phone.zasora import ZasoraApp
+    from src.components.phone.zasora.app import ZasoraApp
     from src.core.asset_manager import AssetManager
 
-
-def _make_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
-    """Create arcade.Rect from x, y, width, height (x, y is bottom-left corner)."""
-    return arcade.Rect(x, x + width, y, y + height, width, height, x + width / 2, y + height / 2)
-
-
-def _make_centered_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
-    """Create arcade.Rect from center x, y and width, height."""
-    left = x - width / 2
-    right = x + width / 2
-    bottom = y - height / 2
-    top = y + height / 2
-    return arcade.Rect(left, right, bottom, top, width, height, x, y)
-
-
-# Phone constants
 PHONE_WIDTH = 400
 PHONE_HEIGHT = 640
 ADD_SCALE_PHONE_FACTOR = 1.1
-
-# Boot animation duration in seconds
 BOOT_DURATION = 1.0
-
-# App icon positions relative to phone screen (400x640)
-APP_ICON_SIZE = 40
-APP_ICON_TEXT_HEIGHT = 20
-
-# App positions (left, top) relative to phone screen
-APP_POSITIONS = {
-    "zasora": (85, 125),  # Left upper
-}
 
 
 class Phone:
-    """Phone component with state management."""
-
     def __init__(self, asset_manager: AssetManager) -> None:
         self.asset_manager = asset_manager
-
-        # Calculate scale factor
         self.scale_factor = (SCREEN_HEIGHT / PHONE_HEIGHT) * ADD_SCALE_PHONE_FACTOR
-
-        # Phone dimensions after scaling
         self.scaled_width = PHONE_WIDTH * self.scale_factor
         self.scaled_height = PHONE_HEIGHT * self.scale_factor
-
-        # Phone position (centered on screen)
-        self.center_x = SCREEN_WIDTH / 2
-        self.center_y = SCREEN_HEIGHT / 2
-
-        # Calculate phone top-left corner for centered positioning
-        self.phone_x = self.center_x - self.scaled_width / 2
-        self.phone_y = self.center_y - self.scaled_height / 2
-
-        # Power button (bottom right of screen, not phone)
-        self.power_button_size = 64 * self.scale_factor
-        self.power_button_x = SCREEN_WIDTH - self.power_button_size - 20
-        self.power_button_y = 20
-
-        # State (external, like Vue)
+        
+        center_x = SCREEN_WIDTH / 2
+        center_y = SCREEN_HEIGHT / 2
+        
         self.state = PhoneData()
-
-        # Boot timer (using delta_time instead of window.time)
         self._boot_elapsed: float = 0.0
-
-        # Load textures
-        self._load_textures()
-
-        # Cached gray power button texture
-        self._gray_power_button_texture: arcade.Texture | None = None
-
-        # Initialize zasora app (lazy loading)
+        
+        self.layout = PhoneLayout(self.asset_manager, self.scale_factor, self.scaled_width, self.scaled_height, center_x, center_y)
+        self.home = PhoneHome(self.asset_manager, self.scale_factor, self.scaled_width, self.scaled_height, PHONE_HEIGHT)
+        
         self._zasora_app: ZasoraApp | None = None
+
+    def resize(self, width: float, height: float) -> None:
+        self.layout.resize(width / 2, height / 2, width, height)
+        if self._zasora_app:
+            self._zasora_app.resize(
+                self.layout.phone_x + 70 * self.scale_factor,
+                self.layout.phone_y + 90 * self.scale_factor,
+                230 * self.scale_factor,
+                435 * self.scale_factor
+            )
 
     @property
     def zasora_app(self) -> ZasoraApp:
-        """Get or create zasora app instance."""
         if self._zasora_app is None:
-            from src.components.phone.zasora import ZasoraApp
+            from src.components.phone.zasora.app import ZasoraApp
+            app_w = 230 * self.scale_factor
+            app_h = 435 * self.scale_factor
+            app_x = self.layout.phone_x + 70 * self.scale_factor
+            app_y = self.layout.phone_y + 90 * self.scale_factor
             self._zasora_app = ZasoraApp(
                 self.asset_manager,
-                self.phone_x,
-                self.phone_y,
+                app_x,
+                app_y,
+                app_w,
+                app_h,
                 self.scale_factor,
             )
         return self._zasora_app
 
-    @property
-    def current_app(self) -> str | None:
-        """Get currently running app name."""
-        if self.zasora_app.state.is_running:
-            return "zasora"
-        return None
-
-    def _load_textures(self) -> None:
-        """Load phone textures from asset manager."""
-        self.body_texture = self.asset_manager.get_texture("telefon_body")
-        self.screen_off_texture = self.asset_manager.get_texture("SCREEN_OFF")
-        self.screen_black_texture = self.asset_manager.get_texture("SCREEN_BLACK")
-        self.screen_on_texture = self.asset_manager.get_texture("SCREEN_ON")
-        self.power_button_texture = self.asset_manager.get_texture("powerbtn")
-        self.turtle_logo_texture = self.asset_manager.get_texture("turtlelogo")
-        self.zasora_icon_texture = self.asset_manager.get_texture("zasora")
-
-    def _create_gray_power_button(self) -> arcade.Texture | None:
-        """Create a gray-filtered version of the power button texture using PIL."""
-        if self.power_button_texture is None:
-            return None
-
-        # Get image from texture
-        img = self.power_button_texture.image
-
-        # Convert to PIL Image if needed
-        if not isinstance(img, Image.Image):
-            return None
-
-        # Apply desaturation and brightness reduction
-        enhancer = ImageEnhance.Color(img)
-        img = enhancer.enhance(0)  # Desaturate (grayscale)
-
-        enhancer = ImageEnhance.Brightness(img)
-        img = enhancer.enhance(0.7)  # Darken
-
-        # Create texture from modified image
-        return arcade.Texture(image=img)
-
-    def _get_gray_power_button(self) -> arcade.Texture | None:
-        """Get or create gray power button texture."""
-        if self._gray_power_button_texture is None:
-            self._gray_power_button_texture = self._create_gray_power_button()
-        return self._gray_power_button_texture
-
-    def _load_videos(self) -> list[Path]:
-        """Load video files from zasora directory."""
-        video_dir = Path(__file__).parent.parent.parent.parent / "assets" / "video" / "zasora"
-        if video_dir.exists():
-            return list(video_dir.glob("*.webm"))
-        return []
-
     def _start_boot(self) -> None:
-        """Start boot sequence."""
         self.state.state = PhoneState.BOOTING
         self.state.power_button_blocked = True
         self.state.videos_loaded = False
-        self._boot_elapsed = 0.0  # Reset boot timer
-
-        # Load videos synchronously (will be fast for small files)
-        self.state.video_files = self._load_videos()
+        self._boot_elapsed = 0.0
 
     def _complete_boot(self) -> None:
-        """Complete boot sequence."""
         self.state.state = PhoneState.ON
         self.state.videos_loaded = True
         self.state.power_button_blocked = False
 
     def _toggle_power(self) -> None:
-        """Toggle phone power state."""
         if self.state.state == PhoneState.OFF:
             self._start_boot()
         elif self.state.state == PhoneState.ON and not self.state.power_button_blocked:
             self.state.state = PhoneState.OFF
             self.state.power_button_blocked = True
-            self.state.power_button_block_time = 0.3  # Debounce time
+            self.state.power_button_block_time = 0.3
+            self._close_app()
 
-    def _launch_app(self, app_name: str) -> None:
-        """Launch an app by name."""
-        if app_name == "zasora":
-            self.zasora_app.start()
+    def _go_home(self) -> None:
+        if self.state.state == PhoneState.ON:
+            self._close_app()
 
     def _close_app(self) -> None:
-        """Close currently running app."""
         if self.zasora_app.state.is_running:
             self.zasora_app.stop()
 
-    def _check_app_icon_click(self, x: float, y: float) -> bool:
-        """Check if click was on an app icon and launch it."""
-        if self.state.state != PhoneState.ON:
-            return False
-
-        for app_name, (pos_x, pos_y) in APP_POSITIONS.items():
-            # Calculate icon position and size
-            icon_size = APP_ICON_SIZE * self.scale_factor
-            text_height = APP_ICON_TEXT_HEIGHT * self.scale_factor
-            total_height = icon_size + text_height
-
-            screen_x = self.phone_x + pos_x * self.scale_factor
-            screen_y = self.phone_y + (PHONE_HEIGHT - pos_y) * self.scale_factor - icon_size
-
-            # Check if click is within icon area
-            if (
-                screen_x <= x <= screen_x + icon_size
-                and screen_y <= y <= screen_y + total_height
-            ):
-                self._launch_app(app_name)
-                return True
-
-        return False
-
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> bool:
-        """Handle mouse press events. Returns True if event was handled."""
-        # First check if any app is running and handle its input
-        if self.zasora_app.state.is_running:
-            if self.zasora_app.on_mouse_press(x, y, button, modifiers):
-                return True
-
-        # Check power button click
         if button == arcade.MOUSE_BUTTON_LEFT:
-            # Power button hitbox
-            if (
-                self.power_button_x <= x <= self.power_button_x + self.power_button_size
-                and self.power_button_y <= y <= self.power_button_y + self.power_button_size
-            ):
+            pb_rect_left = self.layout.power_button_x
+            pb_rect_right = self.layout.power_button_x + self.layout.power_button_size
+            pb_rect_bottom = self.layout.power_button_y
+            pb_rect_top = self.layout.power_button_y + self.layout.power_button_size
+            
+            if pb_rect_left <= x <= pb_rect_right and pb_rect_bottom <= y <= pb_rect_top:
                 if not self.state.power_button_blocked:
                     self._toggle_power()
                 return True
+                
+            hb_rect_left = self.layout.home_button_x
+            hb_rect_right = self.layout.home_button_x + self.layout.home_button_size
+            hb_rect_bottom = self.layout.home_button_y
+            hb_rect_top = self.layout.home_button_y + self.layout.home_button_size
+            
+            if hb_rect_left <= x <= hb_rect_right and hb_rect_bottom <= y <= hb_rect_top:
+                if self.state.state == PhoneState.ON:
+                    self._go_home()
+                return True
 
-            # Check app icon clicks (only when on home screen)
-            if self.state.state == PhoneState.ON:
-                if self._check_app_icon_click(x, y):
+        if self.zasora_app.state.is_running:
+            if self.zasora_app.on_mouse_press(x, y, button, modifiers):
+                return True
+            if button == arcade.MOUSE_BUTTON_RIGHT:
+                self._close_app()
+                return True
+
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            if self.state.state == PhoneState.ON and not self.zasora_app.state.is_running:
+                app_clicked = self.home.check_app_icon_click(x, y, self.layout.phone_x, self.layout.phone_y)
+                if app_clicked == "zasora":
+                    self.zasora_app.start()
                     return True
-
         return False
 
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> bool:
-        """Handle mouse release events. Returns True if event was handled."""
-        # Pass to running app first
         if self.zasora_app.state.is_running:
             if self.zasora_app.on_mouse_release(x, y, button, modifiers):
                 return True
         return False
 
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> bool:
+        if self.zasora_app.state.is_running:
+            return self.zasora_app.on_mouse_motion(x, y, dx, dy)
+        return False
+
     def update(self, delta_time: float) -> None:
-        """Update phone state."""
-        # Update running app
         if self.zasora_app.state.is_running:
             self.zasora_app.update(delta_time)
-
-        # Handle power button debounce
+            
         if self.state.power_button_blocked and self.state.state == PhoneState.ON:
             self.state.power_button_block_time -= delta_time
             if self.state.power_button_block_time <= 0:
                 self.state.power_button_blocked = False
-
-        # Update boot animation progress
+                
         if self.state.state == PhoneState.BOOTING:
             self._boot_elapsed += delta_time
             if self._boot_elapsed >= BOOT_DURATION:
                 self._complete_boot()
 
-    def _draw_scaled_texture(
-        self,
-        texture: arcade.Texture | None,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-    ) -> None:
-        """Draw texture scaled to specified dimensions."""
-        if texture is None:
-            return
+    def draw(self) -> None:
+        self.layout.draw_base()
 
-        arcade.draw_texture_rect(
-            texture,
-            _make_centered_rect(x, y, width, height),
-        )
+        if self.state.state == PhoneState.OFF:
+            self.layout.draw_off_screen()
+        elif self.state.state == PhoneState.BOOTING:
+            progress = min(self._boot_elapsed / BOOT_DURATION, 1.0)
+            self.layout.draw_boot_screen(progress)
+        elif self.state.state == PhoneState.ON:
+            if self.zasora_app.state.is_running:
+                self.zasora_app.draw()
+            else:
+                self.home.draw(self.layout.phone_x, self.layout.phone_y)
 
-    def _draw_app_icon(
-        self,
-        icon_texture: arcade.Texture | None,
-        label: str,
-        base_x: float,
-        base_y: float,
-        font_name: str,
-    ) -> None:
-        """Draw app icon with label."""
-        # Scale icon size
+        self.layout.draw_overlay(self.state)
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\components\phone\home.py
+------------------------------------------------------------
+from __future__ import annotations
+import arcade
+from typing import TYPE_CHECKING
+from src.shared.utils import make_centered_rect, make_rect
+from src.ui.shapes import draw_rounded_rect
+
+if TYPE_CHECKING:
+    from src.core.asset_manager import AssetManager
+
+APP_ICON_SIZE = 40
+APP_ICON_TEXT_HEIGHT = 20
+APP_POSITIONS = {"zasora": (85, 125)}
+
+class PhoneHome:
+    def __init__(self, asset_manager: AssetManager, scale_factor: float, scaled_width: float, scaled_height: float, phone_height: float):
+        self.asset_manager = asset_manager
+        self.scale_factor = scale_factor
+        self.scaled_width = scaled_width
+        self.scaled_height = scaled_height
+        self.phone_height = phone_height
+        self.screen_on_texture = self.asset_manager.get_texture("SCREEN_ON")
+        self.zasora_icon_texture = self.asset_manager.get_texture("zasora")
+
+    def draw(self, phone_x: float, phone_y: float):
+        if self.screen_on_texture:
+            arcade.draw_texture_rect(
+                self.screen_on_texture,
+                make_centered_rect(phone_x + self.scaled_width / 2, phone_y + self.scaled_height / 2, self.scaled_width, self.scaled_height),
+            )
+        
+        font_path = "assets/font.ttf"
+        for app_name, (pos_x, pos_y) in APP_POSITIONS.items():
+            if app_name == "zasora":
+                self._draw_app_icon(self.zasora_icon_texture, "zasora", phone_x, phone_y, pos_x, pos_y, str(font_path))
+
+    def _draw_app_icon(self, icon_texture, label, phone_x, phone_y, base_x, base_y, font_name):
         icon_size = APP_ICON_SIZE * self.scale_factor
-        max_text_height = APP_ICON_TEXT_HEIGHT * self.scale_factor
+        bl_x = phone_x + base_x * self.scale_factor
+        bl_y = phone_y + (self.phone_height - base_y) * self.scale_factor - icon_size
 
-        # Calculate screen position
-        screen_x = self.phone_x + base_x * self.scale_factor
-        screen_y = self.phone_y + (PHONE_HEIGHT - base_y) * self.scale_factor - icon_size
+        draw_rounded_rect(bl_x, bl_y, icon_size, icon_size, arcade.color.BLACK, icon_size * 0.2)
 
-        # Draw icon background (black rounded square)
-        self._draw_rounded_rect_filled(
-            screen_x, screen_y, icon_size, icon_size,
-            arcade.color.BLACK,
-            corner_radius=icon_size * 0.2,  # 20% rounded corners
-        )
-
-        # Draw icon texture (75% of square size)
         if icon_texture:
             texture_size = icon_size * 0.75
             texture_offset = (icon_size - texture_size) / 2
             arcade.draw_texture_rect(
                 icon_texture,
-                _make_rect(
-                    screen_x + texture_offset,
-                    screen_y + texture_offset,
-                    texture_size,
-                    texture_size,
-                ),
+                make_rect(bl_x + texture_offset, bl_y + texture_offset, texture_size, texture_size),
             )
 
-        # Draw label (immediately below icon, max 20px height, truncate with dots if needed)
-        font_size = int(10 * self.scale_factor)  # Smaller font size
-        label_y = screen_y - font_size  # Start immediately below icon
-
-        # Truncate label if it doesn't fit in max_text_height
-        display_label = self._truncate_label(label, icon_size, font_name, font_size, max_text_height)
-
+        font_size = int(12 * self.scale_factor)
         arcade.draw_text(
-            display_label,
-            screen_x + icon_size / 2,
-            label_y,
-            arcade.color.WHITE,
-            font_size=font_size,
-            font_name=font_name,
-            anchor_x="center",
-            anchor_y="top",
+            label, bl_x + icon_size / 2, bl_y - font_size * 0.5,
+            arcade.color.WHITE, font_size=font_size, font_name=font_name,
+            anchor_x="center", anchor_y="top"
         )
 
-    def _truncate_label(
-        self,
-        label: str,
-        available_width: float,
-        font_name: str,
-        font_size: int,
-        max_height: float,
-    ) -> str:
-        """Truncate label with dots if it doesn't fit in available space."""
-        # Simple truncation: if text is too long, cut it and add dots
-        # Use smaller multiplier to allow more characters (0.45 instead of 0.6)
-        max_chars = int(available_width / (font_size * 0.45))
-        if len(label) > max_chars:
-            return label[:max_chars - 3] + "..."
-        return label
-
-    def _draw_rounded_rect_filled(
-        self,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        color: tuple[int, int, int],
-        corner_radius: float,
-    ) -> None:
-        """Draw a filled rounded rectangle."""
-        # Draw main rectangle
-        arcade.draw_rect_filled(
-            _make_rect(x, y, width, height),
-            color,
-        )
-
-        # Draw corner circles
-        radius = corner_radius
-        # Bottom-left
-        arcade.draw_circle_filled(
-            x + radius, y + radius, radius, color
-        )
-        # Bottom-right
-        arcade.draw_circle_filled(
-            x + width - radius, y + radius, radius, color
-        )
-        # Top-left
-        arcade.draw_circle_filled(
-            x + radius, y + height - radius, radius, color
-        )
-        # Top-right
-        arcade.draw_circle_filled(
-            x + width - radius, y + height - radius, radius, color
-        )
-
-        # Draw side rectangles to fill gaps
-        # Left
-        arcade.draw_rect_filled(
-            _make_rect(x, y + radius, radius, height - 2 * radius),
-            color,
-        )
-        # Right
-        arcade.draw_rect_filled(
-            _make_rect(x + width - radius, y + radius, radius, height - 2 * radius),
-            color,
-        )
-        # Bottom
-        arcade.draw_rect_filled(
-            _make_rect(x + radius, y, width - 2 * radius, radius),
-            color,
-        )
-        # Top
-        arcade.draw_rect_filled(
-            _make_rect(x + radius, y + height - radius, width - 2 * radius, radius),
-            color,
-        )
-
-    def _draw_boot_screen(self) -> None:
-        """Draw boot animation screen."""
-        # Draw black screen
-        screen_x = self.phone_x
-        screen_y = self.phone_y
-
-        self._draw_scaled_texture(
-            self.screen_black_texture,
-            screen_x + self.scaled_width / 2,
-            screen_y + self.scaled_height / 2,
-            self.scaled_width,
-            self.scaled_height,
-        )
-
-        # Calculate boot progress
-        progress = min(self._boot_elapsed / BOOT_DURATION, 1.0)
-
-        # Draw turtle logo (centered relative to phone screen, shifted 15px left)
-        logo_size = 128 * self.scale_factor
-        logo_x = self.center_x - 15 * self.scale_factor  # Shift 15px left (scaled)
-        logo_y = self.center_y + 50 * self.scale_factor
-
-        if self.turtle_logo_texture:
-            arcade.draw_texture_rect(
-                self.turtle_logo_texture,
-                _make_centered_rect(logo_x, logo_y, logo_size, logo_size),
-            )
-
-        # Draw "TURTLE OS" text (aligned with shifted logo)
-        font_path = Path(__file__).parent.parent.parent.parent / "assets" / "font.ttf"
-        arcade.draw_text(
-            "TURTLE OS",
-            logo_x,  # Align with logo
-            logo_y - logo_size / 2 - 20 * self.scale_factor,
-            arcade.color.WHITE,
-            font_size=int(24 * self.scale_factor),
-            font_name=str(font_path),
-            anchor_x="center",
-            anchor_y="top",
-        )
-
-        # Draw "booting" text with animation
-        booting_text = "booting" + "." * int(progress * 3)
-        arcade.draw_text(
-            booting_text,
-            self.center_x,
-            logo_y - logo_size / 2 - 50 * self.scale_factor,
-            arcade.color.GRAY,
-            font_size=int(16 * self.scale_factor),
-            font_name=str(font_path),
-            anchor_x="center",
-            anchor_y="top",
-        )
-
-    def _draw_home_screen(self) -> None:
-        """Draw home screen with app icons."""
-        screen_x = self.phone_x
-        screen_y = self.phone_y
-
-        # Draw screen background (wallpaper)
-        self._draw_scaled_texture(
-            self.screen_on_texture,
-            screen_x + self.scaled_width / 2,
-            screen_y + self.scaled_height / 2,
-            self.scaled_width,
-            self.scaled_height,
-        )
-
-        # Draw app icons
-        font_path = Path(__file__).parent.parent.parent.parent / "assets" / "font.ttf"
-
+    def check_app_icon_click(self, x, y, phone_x, phone_y) -> str | None:
         for app_name, (pos_x, pos_y) in APP_POSITIONS.items():
-            if app_name == "zasora":
-                self._draw_app_icon(
-                    self.zasora_icon_texture,
-                    "zasora",
-                    pos_x,
-                    pos_y,
-                    str(font_path),
-                )
-
-    def draw(self) -> None:
-        """Draw phone component."""
-        # Draw phone body
-        if self.body_texture:
-            arcade.draw_texture_rect(
-                self.body_texture,
-                _make_rect(self.phone_x, self.phone_y, self.scaled_width, self.scaled_height),
-            )
-
-        # Draw screen based on state
-        screen_x = self.phone_x
-        screen_y = self.phone_y
-
-        if self.state.state == PhoneState.OFF:
-            # Draw off screen
-            self._draw_scaled_texture(
-                self.screen_off_texture,
-                screen_x + self.scaled_width / 2,
-                screen_y + self.scaled_height / 2,
-                self.scaled_width,
-                self.scaled_height,
-            )
-        elif self.state.state == PhoneState.BOOTING:
-            self._draw_boot_screen()
-        elif self.state.state == PhoneState.ON:
-            # Check if any app is running
-            if self.zasora_app.state.is_running:
-                # Draw SCREEN_BLACK as background for app
-                self._draw_scaled_texture(
-                    self.screen_black_texture,
-                    screen_x + self.scaled_width / 2,
-                    screen_y + self.scaled_height / 2,
-                    self.scaled_width,
-                    self.scaled_height,
-                )
-                # Draw zasora app on top
-                self.zasora_app.draw()
-            else:
-                self._draw_home_screen()
-
-        # Draw power button
-        if self.power_button_texture:
-            # Apply gray filter if blocked
-            if self.state.power_button_blocked:
-                # Draw gray version of the button
-                gray_texture = self._get_gray_power_button()
-                if gray_texture:
-                    arcade.draw_texture_rect(
-                        gray_texture,
-                        _make_rect(self.power_button_x, self.power_button_y, self.power_button_size, self.power_button_size),
-                    )
-                else:
-                    # Fallback: draw original with gray overlay
-                    arcade.draw_texture_rect(
-                        self.power_button_texture,
-                        _make_rect(self.power_button_x, self.power_button_y, self.power_button_size, self.power_button_size),
-                    )
-                    arcade.draw_rect_filled(
-                        _make_rect(self.power_button_x, self.power_button_y, self.power_button_size, self.power_button_size),
-                        (128, 128, 128, 128),  # Semi-transparent gray
-                    )
-            else:
-                arcade.draw_texture_rect(
-                    self.power_button_texture,
-                    _make_rect(self.power_button_x, self.power_button_y, self.power_button_size, self.power_button_size),
-                )
-
-    def get_videos(self) -> list[Path]:
-        """Get loaded video files."""
-        return self.state.video_files.copy()
-
+            icon_size = APP_ICON_SIZE * self.scale_factor
+            text_height = APP_ICON_TEXT_HEIGHT * self.scale_factor
+            bl_x = phone_x + pos_x * self.scale_factor
+            bl_y = phone_y + (self.phone_height - pos_y) * self.scale_factor - icon_size
+            if bl_x <= x <= bl_x + icon_size and bl_y - text_height <= y <= bl_y + icon_size:
+                return app_name
+        return None
 ------------------------------------------------------------
 
 ------------------------------------------------------------
-FILE: src\components\phone\zasora.py
+FILE: src\components\phone\layout.py
 ------------------------------------------------------------
-"""Zasora app component with video player."""
-
 from __future__ import annotations
-
-import random
-from pathlib import Path
-from typing import TYPE_CHECKING
-
 import arcade
-import pyglet
-import pyglet.media
-import pyglet.media.codecs
-
-from src.states.zasora import ZasoraState
+from typing import TYPE_CHECKING
+from src.states.phone import PhoneState
+from src.shared.utils import make_rect, make_centered_rect
 
 if TYPE_CHECKING:
-    from src.core.asset_manager import AssetManager
+    from src.states.phone import PhoneData
 
-
-# Zasora app constants
-ZASORA_LOGO_SIZE = 80
-ZASORA_TEXT_HEIGHT = 30
-ZASORA_HEADER_HEIGHT = ZASORA_LOGO_SIZE + ZASORA_TEXT_HEIGHT + 10
-
-# Video area within phone screen
-PHONE_SCREEN_WIDTH = 400
-PHONE_SCREEN_HEIGHT = 640
-VIDEO_AREA_Y = 100  # Start from bottom of phone screen
-VIDEO_AREA_HEIGHT = PHONE_SCREEN_HEIGHT - VIDEO_AREA_Y - ZASORA_HEADER_HEIGHT
-
-
-def _make_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
-    """Create arcade.Rect from x, y, width, height (x, y is bottom-left corner)."""
-    return arcade.Rect(x, x + width, y, y + height, width, height, x + width / 2, y + height / 2)
-
-
-class VideoPlayer:
-    """Video player using pyglet media with texture output."""
-
-    def __init__(self) -> None:
-        self._player: pyglet.media.Player | None = None
-        self._source: pyglet.media.Source | None = None
-        self._texture: pyglet.image.Texture | None = None
-        self._is_playing: bool = False
-
-    def load(self, video_path: Path) -> bool:
-        """Load video from path."""
-        try:
-            self._source = pyglet.media.load(str(video_path))
-            self._player = pyglet.media.Player()
-            self._player.queue(self._source)
-            self._player.play()
-            self._is_playing = True
-            return True
-        except Exception as e:
-            print(f"Failed to load video {video_path}: {e}")
-            return False
-
-    def update(self) -> None:
-        """Update video player state."""
-        if self._player:
-            # pyglet media player updates automatically via pyglet.app
-            pass
-
-    def get_texture(self) -> arcade.Texture | None:
-        """Get current video frame as arcade texture."""
-        if not self._player or not self._player.texture:
-            return None
-
-        # Get pyglet texture
-        pyglet_tex = self._player.texture
-        
-        # Get the actual texture (TextureRegion has .texture attribute)
-        if hasattr(pyglet_tex, 'texture'):
-            actual_tex = pyglet_tex.texture
-        else:
-            actual_tex = pyglet_tex
-        
-        # Get image from texture
-        if hasattr(actual_tex, 'get_image'):
-            img = actual_tex.get_image()
-        elif hasattr(actual_tex, 'image'):
-            img = actual_tex.image
-        else:
-            return None
-        
-        # Create arcade texture from image
-        arcade_tex = arcade.Texture(image=img)
-        return arcade_tex
-
-    def is_finished(self) -> bool:
-        """Check if video has finished playing."""
-        if not self._player:
-            return True
-        return not self._player.playing and not self._player.source
-
-    def stop(self) -> None:
-        """Stop video playback."""
-        if self._player:
-            self._player.pause()
-            self._player.delete()
-            self._player = None
-        self._source = None
-        self._is_playing = False
-
-
-class ZasoraApp:
-    """Zasora app with video player and TikTok-style swipe navigation."""
-
-    def __init__(self, asset_manager: AssetManager, phone_x: float, phone_y: float, scale_factor: float) -> None:
+class PhoneLayout:
+    def __init__(self, asset_manager, scale_factor, scaled_width, scaled_height, center_x, center_y):
         self.asset_manager = asset_manager
-        self.state = ZasoraState()
-
-        # Phone positioning
-        self.phone_x = phone_x
-        self.phone_y = phone_y
         self.scale_factor = scale_factor
+        self.scaled_width = scaled_width
+        self.scaled_height = scaled_height
+        self.power_button_size = 64 * self.scale_factor
+        self.home_button_size = 64 * self.scale_factor
+        self.body_texture = self.asset_manager.get_texture("telefon_body")
+        self.screen_off_texture = self.asset_manager.get_texture("SCREEN_OFF")
+        self.screen_black_texture = self.asset_manager.get_texture("SCREEN_BLACK")
+        self.power_button_texture = self.asset_manager.get_texture("powerbtn")
+        self.home_button_texture = self.asset_manager.get_texture("homebtn")
+        self.turtle_logo_texture = self.asset_manager.get_texture("turtlelogo")
+        self.resize(center_x, center_y, center_x * 2, center_y * 2)
 
-        # Calculate video area on screen (relative to phone)
-        self.video_area_x = phone_x
-        self.video_area_y = phone_y + VIDEO_AREA_Y * scale_factor
-        self.video_area_width = PHONE_SCREEN_WIDTH * scale_factor
-        self.video_area_height = VIDEO_AREA_HEIGHT * scale_factor
+    def resize(self, center_x, center_y, width, height):
+        self.phone_x = center_x - self.scaled_width / 2
+        self.phone_y = center_y - self.scaled_height / 2
+        self.power_button_x = width - self.power_button_size - 20
+        self.power_button_y = 20
+        self.home_button_x = self.power_button_x - self.home_button_size - 20
+        self.home_button_y = 20
+        self.center_x, self.center_y = center_x, center_y
 
-        # Swipe detection
-        self._swipe_start_y: float = 0.0
-        self._swipe_threshold: float = 50 * scale_factor  # Minimum swipe distance
-        self._is_swiping: bool = False
-        self._last_swipe_time: float = 0.0
-        self._swipe_cooldown: float = 0.3  # Seconds between swipes
-
-        # Video player
-        self._video_player = VideoPlayer()
-
-        # Load textures
-        self._load_textures()
-
-        # Load videos
-        self._load_videos()
-
-    def _load_textures(self) -> None:
-        """Load zasora textures."""
-        self.zasora_logo_texture = self.asset_manager.get_texture("zasora")
-
-    def _load_videos(self) -> None:
-        """Load and shuffle video files."""
-        video_dir = Path(__file__).parent.parent.parent.parent / "assets" / "video" / "zasora"
-        if video_dir.exists():
-            self.state.video_files = list(video_dir.glob("*.webm"))
-
-            # Create shuffled order
-            indices = list(range(len(self.state.video_files)))
-            random.shuffle(indices)
-            self.state.shuffled_order = indices
-
-    def start(self) -> None:
-        """Start the zasora app."""
-        self.state.is_running = True
-        self._load_current_video()
-
-    def stop(self) -> None:
-        """Stop the zasora app."""
-        self.state.is_running = False
-        self._video_player.stop()
-        self.state.reset()
-
-    def _load_current_video(self) -> None:
-        """Load current video from shuffled list."""
-        self._video_player.stop()
-
-        video_path = self.state.get_current_video()
-        if video_path and video_path.exists():
-            self._video_player.load(video_path)
-
-    def _next_video(self) -> None:
-        """Go to next video in shuffled order."""
-        self.state.next_video()
-        self._load_current_video()
-
-    def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> bool:
-        """Handle mouse press for swipe detection."""
-        if not self.state.is_running:
-            return False
-
-        if button == arcade.MOUSE_BUTTON_LEFT:
-            # Check if click is in video area
-            if (
-                self.video_area_x <= x <= self.video_area_x + self.video_area_width
-                and self.video_area_y <= y <= self.video_area_y + self.video_area_height
-            ):
-                self._is_swiping = True
-                self._swipe_start_y = y
-                return True
-        return False
-
-    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> bool:
-        """Handle mouse release for swipe detection."""
-        if not self.state.is_running or not self._is_swiping:
-            return False
-
-        if button == arcade.MOUSE_BUTTON_LEFT:
-            self._is_swiping = False
-            swipe_distance = y - self._swipe_start_y
-
-            # Check if swipe was downward and long enough
-            if swipe_distance > self._swipe_threshold:
-                current_time = arcade.get_window().time
-                if current_time - self._last_swipe_time > self._swipe_cooldown:
-                    self._next_video()
-                    self._last_swipe_time = current_time
-                    return True
-        return False
-
-    def update(self, delta_time: float) -> None:
-        """Update zasora app state."""
-        if not self.state.is_running:
-            return
-
-        # Update video player
-        self._video_player.update()
-
-        # Check if current video finished
-        if self._video_player.is_finished():
-            self._next_video()
-
-    def draw(self) -> None:
-        """Draw zasora app inside phone screen area."""
-        if not self.state.is_running:
-            return
-
-        # Calculate header position (relative to phone)
-        header_y = self.phone_y + (PHONE_SCREEN_HEIGHT - ZASORA_HEADER_HEIGHT) * self.scale_factor
-
-        # Draw header background
-        arcade.draw_rect_filled(
-            _make_rect(
-                self.phone_x,
-                header_y,
-                PHONE_SCREEN_WIDTH * self.scale_factor,
-                ZASORA_HEADER_HEIGHT * self.scale_factor,
-            ),
-            arcade.color.BLACK,
-        )
-
-        # Draw zasora logo (centered at top)
-        if self.zasora_logo_texture:
-            logo_size = ZASORA_LOGO_SIZE * self.scale_factor
-            logo_x = self.phone_x + (PHONE_SCREEN_WIDTH / 2) * self.scale_factor
-            logo_y = header_y + (ZASORA_LOGO_SIZE / 2) * self.scale_factor
-
+    def draw_base(self):
+        if self.screen_black_texture:
             arcade.draw_texture_rect(
-                self.zasora_logo_texture,
-                _make_rect(logo_x - logo_size / 2, logo_y - logo_size / 2, logo_size, logo_size),
+                self.screen_black_texture,
+                make_centered_rect(self.phone_x + self.scaled_width / 2, self.phone_y + self.scaled_height / 2, self.scaled_width, self.scaled_height),
             )
 
-        # Draw "ЗАСОРА" text with stylized font
-        font_path = Path(__file__).parent.parent.parent.parent / "assets" / "font.ttf"
-        arcade.draw_text(
-            "ЗАСОРА",
-            self.phone_x + (PHONE_SCREEN_WIDTH / 2) * self.scale_factor,
-            header_y + ZASORA_LOGO_SIZE * self.scale_factor,
-            arcade.color.WHITE,
-            font_size=int(20 * self.scale_factor),
-            font_name=str(font_path),
-            anchor_x="center",
-            anchor_y="top",
-            bold=True,
-        )
-
-        # Draw video
-        self._draw_video()
-
-    def _draw_video(self) -> None:
-        """Draw current video frame."""
-        # Get current video frame texture
-        video_texture = self._video_player.get_texture()
-
-        if video_texture:
-            # Draw video scaled to fit video area
+    def draw_off_screen(self):
+        if self.screen_off_texture:
             arcade.draw_texture_rect(
-                video_texture,
-                _make_rect(
-                    self.video_area_x,
-                    self.video_area_y,
-                    self.video_area_width,
-                    self.video_area_height,
-                ),
-            )
-        else:
-            # Draw loading indicator
-            arcade.draw_text(
-                "Loading...",
-                self.video_area_x + self.video_area_width / 2,
-                self.video_area_y + self.video_area_height / 2,
-                arcade.color.GRAY,
-                font_size=int(16 * self.scale_factor),
-                anchor_x="center",
-                anchor_y="center",
+                self.screen_off_texture,
+                make_centered_rect(self.phone_x + self.scaled_width / 2, self.phone_y + self.scaled_height / 2, self.scaled_width, self.scaled_height),
             )
 
-        # Draw video counter
-        video_index = self.state.current_video_index + 1
-        total_videos = len(self.state.video_files)
+    def draw_boot_screen(self, progress: float):
+        logo_size = 128 * self.scale_factor
+        logo_x, logo_y = self.center_x - 15 * self.scale_factor, self.center_y + 50 * self.scale_factor
+        if self.turtle_logo_texture:
+            arcade.draw_texture_rect(self.turtle_logo_texture, make_centered_rect(logo_x, logo_y, logo_size, logo_size))
+        
+        font = "assets/font.ttf"
         arcade.draw_text(
-            f"{video_index}/{total_videos}",
-            self.video_area_x + self.video_area_width - 10 * self.scale_factor,
-            self.video_area_y + 10 * self.scale_factor,
-            arcade.color.WHITE,
-            font_size=int(12 * self.scale_factor),
-            anchor_x="right",
-            anchor_y="bottom",
+            "TURTLE OS", logo_x, logo_y - logo_size / 2 - 20 * self.scale_factor, 
+            arcade.color.WHITE, font_size=int(24 * self.scale_factor), 
+            font_name=font, anchor_x="center", anchor_y="top"
+        )
+        arcade.draw_text(
+            "booting" + "." * int(progress * 3), self.center_x, 
+            logo_y - logo_size / 2 - 50 * self.scale_factor, arcade.color.GRAY, 
+            font_size=int(16 * self.scale_factor), font_name=font, anchor_x="center", anchor_y="top"
         )
 
-        # Draw swipe hint (faded)
-        arcade.draw_text(
-            "Swipe down for next",
-            self.video_area_x + self.video_area_width / 2,
-            self.video_area_y + self.video_area_height / 2,
-            (128, 128, 128, 128),  # Gray with alpha
-            font_size=int(14 * self.scale_factor),
-            anchor_x="center",
-            anchor_y="center",
-        )
-
+    def draw_overlay(self, state: PhoneData):
+        if self.body_texture:
+            arcade.draw_texture_rect(self.body_texture, make_rect(self.phone_x, self.phone_y, self.scaled_width, self.scaled_height))
+        
+        for btn, tex, x, y, size, blocked in [("power", self.power_button_texture, self.power_button_x, self.power_button_y, self.power_button_size, state.power_button_blocked), ("home", self.home_button_texture, self.home_button_x, self.home_button_y, self.home_button_size, state.state in (PhoneState.OFF, PhoneState.BOOTING))]:
+            if tex:
+                arcade.draw_texture_rect(tex, make_rect(x, y, size, size))
+                if blocked:
+                    arcade.draw_rect_filled(make_rect(x, y, size, size), (128, 128, 128, 128))
 ------------------------------------------------------------
 
 ------------------------------------------------------------
 FILE: src\components\phone\__init__.py
 ------------------------------------------------------------
-"""Phone component module."""
+from __future__ import annotations
 
-from .phone import Phone
+from typing import TYPE_CHECKING
+import arcade
 
-__all__ = ["Phone"]
+from src.shared.constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from src.states.phone import PhoneData, PhoneState
+from src.components.phone.layout import PhoneLayout
+from src.components.phone.home import PhoneHome
 
+if TYPE_CHECKING:
+    from src.components.phone.zasora.app import ZasoraApp
+    from src.core.asset_manager import AssetManager
+
+PHONE_WIDTH = 400
+PHONE_HEIGHT = 640
+ADD_SCALE_PHONE_FACTOR = 1.1
+BOOT_DURATION = 1.0
+
+
+class Phone:
+    def __init__(self, asset_manager: AssetManager) -> None:
+        self.asset_manager = asset_manager
+        self.scale_factor = (SCREEN_HEIGHT / PHONE_HEIGHT) * ADD_SCALE_PHONE_FACTOR
+        self.scaled_width = PHONE_WIDTH * self.scale_factor
+        self.scaled_height = PHONE_HEIGHT * self.scale_factor
+        
+        center_x = SCREEN_WIDTH / 2
+        center_y = SCREEN_HEIGHT / 2
+        
+        self.state = PhoneData()
+        self._boot_elapsed: float = 0.0
+        
+        self.layout = PhoneLayout(self.asset_manager, self.scale_factor, self.scaled_width, self.scaled_height, center_x, center_y)
+        self.home = PhoneHome(self.asset_manager, self.scale_factor, self.scaled_width, self.scaled_height, PHONE_HEIGHT)
+        
+        self._zasora_app: ZasoraApp | None = None
+        
+        _ = self.zasora_app
+
+    def resize(self, width: float, height: float) -> None:
+        self.layout.resize(width / 2, height / 2, width, height)
+        if self._zasora_app:
+            self._zasora_app.resize(
+                self.layout.phone_x + 70 * self.scale_factor,
+                self.layout.phone_y + 90 * self.scale_factor,
+                230 * self.scale_factor,
+                435 * self.scale_factor
+            )
+
+    @property
+    def zasora_app(self) -> ZasoraApp:
+        if self._zasora_app is None:
+            from src.components.phone.zasora.app import ZasoraApp
+            app_w = 230 * self.scale_factor
+            app_h = 435 * self.scale_factor
+            app_x = self.layout.phone_x + 70 * self.scale_factor
+            app_y = self.layout.phone_y + 90 * self.scale_factor
+            self._zasora_app = ZasoraApp(
+                self.asset_manager,
+                app_x,
+                app_y,
+                app_w,
+                app_h,
+                self.scale_factor,
+            )
+        return self._zasora_app
+
+    def _start_boot(self) -> None:
+        self.state.state = PhoneState.BOOTING
+        self.state.power_button_blocked = True
+        self.state.videos_loaded = False
+        self._boot_elapsed = 0.0
+
+    def _complete_boot(self) -> None:
+        self.state.state = PhoneState.ON
+        self.state.videos_loaded = True
+        self.state.power_button_blocked = False
+
+    def _toggle_power(self) -> None:
+        if self.state.state == PhoneState.OFF:
+            self._start_boot()
+        elif self.state.state == PhoneState.ON and not self.state.power_button_blocked:
+            self.state.state = PhoneState.OFF
+            self.state.power_button_blocked = True
+            self.state.power_button_block_time = 0.3
+            self._close_app()
+
+    def _go_home(self) -> None:
+        if self.state.state == PhoneState.ON:
+            self._close_app()
+
+    def _close_app(self) -> None:
+        if self.zasora_app.state.is_running:
+            self.zasora_app.stop()
+
+    def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> bool:
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            pb_rect_left = self.layout.power_button_x
+            pb_rect_right = self.layout.power_button_x + self.layout.power_button_size
+            pb_rect_bottom = self.layout.power_button_y
+            pb_rect_top = self.layout.power_button_y + self.layout.power_button_size
+            
+            if pb_rect_left <= x <= pb_rect_right and pb_rect_bottom <= y <= pb_rect_top:
+                if not self.state.power_button_blocked:
+                    self._toggle_power()
+                return True
+                
+            hb_rect_left = self.layout.home_button_x
+            hb_rect_right = self.layout.home_button_x + self.layout.home_button_size
+            hb_rect_bottom = self.layout.home_button_y
+            hb_rect_top = self.layout.home_button_y + self.layout.home_button_size
+            
+            if hb_rect_left <= x <= hb_rect_right and hb_rect_bottom <= y <= hb_rect_top:
+                if self.state.state == PhoneState.ON:
+                    self._go_home()
+                return True
+
+        if self.zasora_app.state.is_running:
+            if self.zasora_app.on_mouse_press(x, y, button, modifiers):
+                return True
+            if button == arcade.MOUSE_BUTTON_RIGHT:
+                self._close_app()
+                return True
+
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            if self.state.state == PhoneState.ON and not self.zasora_app.state.is_running:
+                app_clicked = self.home.check_app_icon_click(x, y, self.layout.phone_x, self.layout.phone_y)
+                if app_clicked == "zasora":
+                    self.zasora_app.start()
+                    return True
+        return False
+
+    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> bool:
+        if self.zasora_app.state.is_running:
+            if self.zasora_app.on_mouse_release(x, y, button, modifiers):
+                return True
+        return False
+
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> bool:
+        if self.zasora_app.state.is_running:
+            return self.zasora_app.on_mouse_motion(x, y, dx, dy)
+        return False
+
+    def on_key_press(self, symbol: int, modifiers: int) -> None:
+        if self.zasora_app.state.is_running:
+            self.zasora_app.on_key_press(symbol, modifiers)
+
+    def on_text(self, text: str) -> None:
+        if self.zasora_app.state.is_running:
+            self.zasora_app.on_text(text)
+
+    def update(self, delta_time: float) -> None:
+        if self._zasora_app:
+            self._zasora_app.update(delta_time)
+            
+        if self.state.power_button_blocked and self.state.state == PhoneState.ON:
+            self.state.power_button_block_time -= delta_time
+            if self.state.power_button_block_time <= 0:
+                self.state.power_button_blocked = False
+                
+        if self.state.state == PhoneState.BOOTING:
+            self._boot_elapsed += delta_time
+            if self._boot_elapsed >= BOOT_DURATION:
+                self._complete_boot()
+
+    def draw(self) -> None:
+        self.layout.draw_base()
+
+        if self.state.state == PhoneState.OFF:
+            self.layout.draw_off_screen()
+        elif self.state.state == PhoneState.BOOTING:
+            progress = min(self._boot_elapsed / BOOT_DURATION, 1.0)
+            self.layout.draw_boot_screen(progress)
+        elif self.state.state == PhoneState.ON:
+            if self.zasora_app.state.is_running:
+                self.zasora_app.draw()
+            else:
+                self.home.draw(self.layout.phone_x, self.layout.phone_y)
+
+        self.layout.draw_overlay(self.state)
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\components\phone\zasora\app.py
+------------------------------------------------------------
+from __future__ import annotations
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+import arcade
+import pyglet
+import pyglet.media
+from src.states.zasora import ZasoraState
+from src.components.phone.zasora.commentPanel import CommentPanel
+from src.components.phone.zasora.header import ZasoraHeader
+from src.shared.utils import make_rect, make_centered_rect
+from src.ui.text import draw_wrapped_text
+
+if TYPE_CHECKING:
+    from src.core.asset_manager import AssetManager
+
+ZASORA_HEADER_HEIGHT = 60
+
+class VideoPlayer:
+    def __init__(self) -> None:
+        self._player: pyglet.media.Player | None = None
+        self._source: pyglet.media.Source | None = None
+        self._is_playing: bool = False
+        self._wants_preload: bool = False
+
+    def load(self, video_path: Path, auto_play: bool = True) -> bool:
+        try:
+            self.stop()
+            self._source = pyglet.media.load(str(video_path))
+            self._player = pyglet.media.Player()
+            self._player.queue(self._source)
+            self._player.volume = 1.0 if auto_play else 0.0
+            self._player.play()
+            self._is_playing = auto_play
+            self._wants_preload = not auto_play
+            return True
+        except Exception: return False
+
+    def update(self) -> None:
+        if self._wants_preload and self._player and self._player.texture:
+            self._player.pause()
+            self._player.seek(0)
+            self._player.volume = 1.0
+            self._wants_preload = False
+
+    def is_finished(self) -> bool:
+        return not self._player or (not self._player.playing and not self._player.source)
+        
+    def seek_start(self) -> None:
+        if self._player:
+            try: self._player.seek(0)
+            except Exception: pass
+
+    def pause(self) -> None:
+        if self._player and self._is_playing:
+            self._player.pause()
+            self._is_playing = False
+            
+    def play(self) -> None:
+        if self._player and not self._is_playing:
+            self._wants_preload = False
+            self._player.volume = 1.0
+            self._player.play()
+            self._is_playing = True
+
+    def draw(self, x: float, y: float, width: float, height: float) -> None:
+        if self._player and self._player.texture:
+            self._player.texture.blit(int(x), int(y), width=int(width), height=int(height))
+
+    def stop(self) -> None:
+        if self._player:
+            self._player.pause()
+            self._player.delete()
+            self._player = None
+        self._source = None
+        self._is_playing = self._wants_preload = False
+
+class ZasoraApp:
+    def __init__(self, asset_manager: AssetManager, app_area_x: float, app_area_y: float, app_area_w: float, app_area_h: float, scale_factor: float) -> None:
+        self.asset_manager = asset_manager
+        self.state = ZasoraState()
+        self.scale_factor = scale_factor
+        self.resize(app_area_x, app_area_y, app_area_w, app_area_h)
+        self._swipe_start_y = self.state.y_offset = 0.0
+        self._is_swiping = False
+        self._video_player, self._next_video_player, self._prev_video_player = VideoPlayer(), VideoPlayer(), VideoPlayer()
+        self.comment_panel = CommentPanel(self.state, scale_factor)
+        self.header = ZasoraHeader(asset_manager, scale_factor)
+        self.font_path = str(Path(__file__).parent.parent.parent.parent.parent / "assets" / "font.ttf")
+        self._load_resources()
+        
+    def resize(self, app_area_x: float, app_area_y: float, app_area_w: float, app_area_h: float) -> None:
+        self.app_x, self.app_y, self.app_w, self.app_h = app_area_x, app_area_y, app_area_w, app_area_h
+        self.header_height = ZASORA_HEADER_HEIGHT * getattr(self, "scale_factor", 1.0)
+        self.video_area_x, self.video_area_y, self.video_area_width = self.app_x, self.app_y, self.app_w
+        self.video_area_height = self.app_h - self.header_height
+
+    def _load_resources(self) -> None:
+        self.like_tex = self.asset_manager.get_texture("like")
+        self.unlike_tex = self.asset_manager.get_texture("unlike")
+        self.comment_tex = self.asset_manager.get_texture("comment")
+        phrases_path = Path(__file__).parent.parent.parent.parent.parent / "assets" / "stories" / "phrases.json"
+        if phrases_path.exists():
+            try:
+                with open(phrases_path, "r", encoding="utf-8") as f: self.state.phrases = json.load(f)
+            except Exception: self.state.phrases = {}
+        self._load_current_video()
+
+    def start(self) -> None:
+        self.state.is_running = True
+        self._video_player.seek_start()
+        self._video_player.play()
+
+    def stop(self) -> None:
+        self.state.is_running = False
+        self._video_player.pause()
+
+    def _load_current_video(self) -> None:
+        if vid := self.state.get_current_video(): self._video_player.load(vid, False)
+        if nxt := self.state.get_video_by_offset(1): self._next_video_player.load(nxt, False)
+        if prv := self.state.get_video_by_offset(-1): self._prev_video_player.load(prv, False)
+
+    def _finalize_swipe(self) -> None:
+        threshold = self.video_area_height * 0.25
+        if abs(self.state.y_offset) > threshold:
+            direction = 1 if self.state.y_offset > 0 else -1
+            if direction == 1:
+                self.state.next_video()
+                self._prev_video_player.stop()
+                self._prev_video_player, self._video_player = self._video_player, self._next_video_player
+                self._next_video_player = VideoPlayer()
+                if nxt := self.state.get_video_by_offset(1): self._next_video_player.load(nxt, False)
+            elif self.state.current_video_index > 0:
+                self.state.prev_video()
+                self._next_video_player.stop()
+                self._next_video_player, self._video_player = self._video_player, self._prev_video_player
+                self._prev_video_player = VideoPlayer()
+                if prv := self.state.get_video_by_offset(-1): self._prev_video_player.load(prv, False)
+            self._video_player.play()
+        self.state.y_offset = 0.0
+        self._video_player.seek_start()
+        if not self.state.show_comments: self._video_player.play()
+
+    def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> bool:
+        if not self.state.is_running: return False
+        if self.state.show_comments:
+            action = self.comment_panel.on_mouse_press(x, y, self.app_x, self.app_y, self.app_w, self.app_h * 0.65, self.state.get_current_video())
+            if action in ("close", "outside"):
+                self.state.show_comments = False
+                self._video_player.play()
+            return True
+        if self.app_x <= x <= self.app_x + self.app_w and self.app_y <= y <= self.app_y + self.app_h:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                self._is_swiping, self._swipe_start_y, self.state.swipe_velocity = True, y, 0
+                return True
+        return False
+
+    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> bool:
+        if self._is_swiping and button == arcade.MOUSE_BUTTON_LEFT:
+            self._is_swiping = False
+            if abs(self._swipe_start_y - y) < 10: self._handle_click(x, y)
+            else: self._finalize_swipe()
+            return True
+        return False
+        
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> bool:
+        if self._is_swiping and not self.state.show_comments:
+            self.state.y_offset += dy
+            self._video_player.pause()
+            return True
+        return False
+
+    def on_key_press(self, symbol: int, modifiers: int) -> None:
+        if self.state.show_comments: self.comment_panel.on_key_press(symbol, modifiers, self.state.get_current_video())
+
+    def on_text(self, text: str) -> None:
+        if self.state.show_comments: self.comment_panel.on_text(text)
+        
+    def _handle_click(self, x: float, y: float) -> None:
+        lx, ly, ls = self.app_x + self.app_w - 40 * self.scale_factor, self.app_y + self.video_area_height / 2, 35 * self.scale_factor
+        if lx - ls/2 <= x <= lx + ls/2:
+            if ly - ls/2 <= y <= ly + ls/2: self._toggle_like(); return
+            if ly - 65 * self.scale_factor - ls/2 <= y <= ly - 65 * self.scale_factor + ls/2:
+                self.state.show_comments = True
+                self._video_player.pause(); return
+        self.state.is_paused = not self.state.is_paused
+        if self.state.is_paused: self._video_player.pause()
+        else: self._video_player.play()
+            
+    def _toggle_like(self) -> None:
+        if vid := self.state.get_current_video():
+            inter = self.state.get_interaction(vid.name)
+            inter.is_liked = not inter.is_liked
+            inter.likes += 1 if inter.is_liked else -1
+            self.state.save_interactions()
+
+    def update(self, delta_time: float) -> None:
+        for p in [self._video_player, self._next_video_player, self._prev_video_player]: p.update()
+        if not self.state.is_running: return
+        if not self._is_swiping and self.state.y_offset != 0:
+            if abs(self.state.y_offset) < 5:
+                self.state.y_offset = 0
+                if not self.state.is_paused and not self.state.show_comments: self._video_player.play()
+            else: self.state.y_offset *= 0.8 
+        if self._video_player.is_finished() and not self.state.is_paused and not self._is_swiping and self.state.y_offset == 0 and not self.state.show_comments:
+            self.state.y_offset = self.video_area_height * 0.45 
+            self._finalize_swipe()
+
+    def draw(self) -> None:
+        if not self.state.is_running: return
+        ctx = arcade.get_window().ctx
+        old_scissor = ctx.scissor
+        ctx.scissor = (int(self.app_x), int(self.app_y), int(self.app_w), int(self.app_h))
+        arcade.draw_rect_filled(make_rect(self.app_x, self.app_y, self.app_w, self.app_h), arcade.color.BLACK)
+        yo = self.state.y_offset
+        if yo > 0: self._next_video_player.draw(self.video_area_x, self.video_area_y + yo - self.video_area_height, self.video_area_width, self.video_area_height)
+        if yo < 0: self._prev_video_player.draw(self.video_area_x, self.video_area_y + yo + self.video_area_height, self.video_area_width, self.video_area_height)
+        self._video_player.draw(self.video_area_x, self.video_area_y + yo, self.video_area_width, self.video_area_height)
+        if self.state.is_paused and not self.state.show_comments:
+            arcade.draw_circle_filled(self.app_x + self.app_w/2, self.app_y + self.video_area_height/2, 30 * self.scale_factor, (0, 0, 0, 150))
+            arcade.draw_triangle_filled(self.app_x + self.app_w/2 - 10 * self.scale_factor, self.app_y + self.video_area_height/2 + 15 * self.scale_factor, self.app_x + self.app_w/2 - 10 * self.scale_factor, self.app_y + self.video_area_height/2 - 15 * self.scale_factor, self.app_x + self.app_w/2 + 15 * self.scale_factor, self.app_y + self.video_area_height/2, arcade.color.WHITE)
+        if vid := self.state.get_current_video():
+            self._draw_overlay(vid); self._draw_interactions(vid)
+            if self.state.show_comments: self.comment_panel.draw(vid, self.app_x, self.app_y, self.app_w, self.app_h * 0.65)
+        self.header.draw(self.app_x, self.app_y, self.app_w, self.app_h, self.header_height)
+        ctx.scissor = old_scissor
+
+    def _draw_overlay(self, current_vid: Path) -> None:
+        info = self.state.phrases.get(current_vid.name, {})
+        auth, desc = info.get("author", ""), info.get("describe", "")
+        if auth or desc:
+            pad, afs, dfs, aw = 10 * self.scale_factor, int(14 * self.scale_factor), int(12 * self.scale_factor), self.app_w - 70 * self.scale_factor 
+            h = pad * 2 + (afs * 1.5 if auth else 0) + (len(desc.split())//3 + 1) * dfs * 1.3
+            arcade.draw_rect_filled(make_rect(self.app_x + 5 * self.scale_factor, self.app_y + 10 * self.scale_factor, aw + pad * 2, h), (0, 0, 0, 150))
+            tx, cy = self.app_x + 5 * self.scale_factor + pad, self.app_y + 10 * self.scale_factor + h - pad
+            if auth:
+                arcade.draw_text(
+                    f"@{auth}", tx, cy, arcade.color.WHITE, 
+                    font_size=afs, font_name=self.font_path, 
+                    anchor_x="left", anchor_y="top", bold=True
+                )
+                cy -= afs * 1.5
+            draw_wrapped_text(desc, tx, cy, aw, dfs, arcade.color.WHITE, self.font_path)
+
+    def _draw_interactions(self, current_vid: Path) -> None:
+        inter = self.state.get_interaction(current_vid.name)
+        ix, ly, r = self.app_x + self.app_w - 25 * self.scale_factor, self.app_y + self.video_area_height / 2, 18 * self.scale_factor
+        for y, tex, val in [(ly, self.like_tex if inter.is_liked else self.unlike_tex, inter.likes), (ly - 65 * self.scale_factor, self.comment_tex, len(inter.comments))]:
+            arcade.draw_circle_filled(ix, y, r, (0, 0, 0, 150))
+            if tex: arcade.draw_texture_rect(tex, make_centered_rect(ix, y, r * 1.2, r * 1.2))
+            arcade.draw_text(
+                str(val), ix, y - r - 5 * self.scale_factor, arcade.color.WHITE, 
+                font_size=int(12 * self.scale_factor), font_name=self.font_path, 
+                anchor_x="center", anchor_y="top"
+            )
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\components\phone\zasora\commentPanel.py
+------------------------------------------------------------
+from __future__ import annotations
+import arcade
+from pathlib import Path
+from src.states.zasora import ZasoraState
+from src.shared.utils import make_rect
+
+class CommentPanel:
+    def __init__(self, state: ZasoraState, scale_factor: float) -> None:
+        self.state = state
+        self.scale_factor = scale_factor
+        self.font_path = str(Path(__file__).parent.parent.parent.parent.parent / "assets" / "font.ttf")
+        self.input_text = ""
+        self.is_typing = False
+
+    def on_mouse_press(self, x: float, y: float, cx: float, cy: float, cw: float, ch: float, current_vid: Path | None) -> str:
+        if cx <= x <= cx + cw and cy <= y <= cy + ch:
+            cs = 30 * self.scale_factor
+            if cx + cw - cs - 10 * self.scale_factor <= x <= cx + cw and cy + ch - cs - 10 * self.scale_factor <= y <= cy + ch:
+                self.is_typing = False
+                return "close"
+            self.is_typing = (cx + 10 * self.scale_factor <= x <= cx + cw - 10 * self.scale_factor and cy + 10 * self.scale_factor <= y <= cy + 40 * self.scale_factor)
+            return "consume"
+        self.is_typing = False
+        return "outside"
+
+    def on_key_press(self, symbol: int, modifiers: int, current_vid: Path | None) -> None:
+        if self.is_typing and current_vid:
+            if symbol == arcade.key.BACKSPACE: self.input_text = self.input_text[:-1]
+            elif symbol in (arcade.key.ENTER, arcade.key.NUM_ENTER) and self.input_text.strip():
+                self.state.get_interaction(current_vid.name).comments.insert(0, {"author": "Player", "text": self.input_text.strip()})
+                self.state.save_interactions()
+                self.input_text, self.is_typing = "", False
+
+    def on_text(self, text: str) -> None:
+        if self.is_typing and len(self.input_text) < 50 and text.isprintable(): self.input_text += text
+
+    def draw(self, current_vid: Path, cx: float, cy: float, cw: float, ch: float) -> None:
+        inter = self.state.get_interaction(current_vid.name)
+        arcade.draw_rect_filled(make_rect(cx, cy, cw, ch), (25, 25, 25, 255))
+        arcade.draw_text(
+            f"{len(inter.comments)} комментариев", cx + cw/2, cy + ch - 15 * self.scale_factor, 
+            arcade.color.WHITE, font_size=int(14 * self.scale_factor), 
+            font_name=self.font_path, anchor_x="center", anchor_y="top", bold=True
+        )
+        
+        close_x, close_y, cs = cx + cw - 20 * self.scale_factor, cy + ch - 20 * self.scale_factor, 6 * self.scale_factor
+        arcade.draw_line(close_x - cs, close_y - cs, close_x + cs, close_y + cs, arcade.color.GRAY, 2)
+        arcade.draw_line(close_x - cs, close_y + cs, close_x + cs, close_y - cs, arcade.color.GRAY, 2)
+        arcade.draw_line(cx, cy + ch - 40 * self.scale_factor, cx + cw, cy + ch - 40 * self.scale_factor, (50, 50, 50, 255), 1)
+        
+        y_pos = cy + ch - 60 * self.scale_factor
+        if not inter.comments:
+            arcade.draw_text(
+                "Нет комментариев", cx + cw/2, y_pos - 20 * self.scale_factor, 
+                arcade.color.GRAY, font_size=int(14 * self.scale_factor), 
+                font_name=self.font_path, anchor_x="center", anchor_y="top"
+            )
+        else:
+            for comment in inter.comments[:5]:
+                auth, txt = comment.get("author", "Player"), comment.get("text", "")
+                ax, ay = cx + 20 * self.scale_factor, y_pos - 10 * self.scale_factor
+                arcade.draw_circle_filled(ax, ay, 12 * self.scale_factor, arcade.color.GRAY)
+                arcade.draw_text(
+                    auth[0].upper(), ax, ay + 4 * self.scale_factor, arcade.color.WHITE, 
+                    font_size=int(10 * self.scale_factor), font_name=self.font_path, 
+                    anchor_x="center", anchor_y="center", bold=True
+                )
+                arcade.draw_text(
+                    auth, cx + 40 * self.scale_factor, y_pos, (150, 150, 150, 255), 
+                    font_size=int(12 * self.scale_factor), font_name=self.font_path, 
+                    anchor_x="left", anchor_y="top", bold=True
+                )
+                arcade.draw_text(
+                    txt, cx + 40 * self.scale_factor, y_pos - 18 * self.scale_factor, arcade.color.WHITE, 
+                    font_size=int(13 * self.scale_factor), font_name=self.font_path, 
+                    anchor_x="left", anchor_y="top"
+                )
+                y_pos -= 55 * self.scale_factor
+
+        arcade.draw_rect_filled(make_rect(cx, cy, cw, 50 * self.scale_factor), (35, 35, 35, 255))
+        arcade.draw_rect_filled(make_rect(cx + 10 * self.scale_factor, cy + 10 * self.scale_factor, cw - 20 * self.scale_factor, 30 * self.scale_factor), (60, 60, 60, 255) if self.is_typing else (50, 50, 50, 255))
+        disp, col = (self.input_text + ("|" if self.is_typing else ""), arcade.color.WHITE) if self.input_text or self.is_typing else ("Добавить комментарий...", arcade.color.GRAY)
+        arcade.draw_text(
+            disp, cx + 20 * self.scale_factor, cy + 25 * self.scale_factor, col, 
+            font_size=int(12 * self.scale_factor), font_name=self.font_path, 
+            anchor_x="left", anchor_y="center"
+        )
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\components\phone\zasora\header.py
+------------------------------------------------------------
+from __future__ import annotations
+import arcade
+from typing import TYPE_CHECKING
+from pathlib import Path
+from src.shared.utils import make_rect
+
+if TYPE_CHECKING:
+    from src.core.asset_manager import AssetManager
+
+class ZasoraHeader:
+    def __init__(self, asset_manager: AssetManager, scale_factor: float) -> None:
+        self.asset_manager = asset_manager
+        self.scale_factor = scale_factor
+        self.logo_texture = self.asset_manager.get_texture("zasora")
+        self.font_path = str(Path(__file__).parent.parent.parent.parent.parent / "assets" / "font.ttf")
+
+    def draw(self, app_x: float, app_y: float, app_w: float, app_h: float, header_height: float) -> None:
+        hy = app_y + app_h - header_height
+        arcade.draw_rect_filled(make_rect(app_x, hy, app_w, header_height), (0, 0, 0, 200))
+        ls, lx, lcy = 40 * self.scale_factor, app_x + 10 * self.scale_factor, hy + header_height / 2
+        if self.logo_texture: arcade.draw_texture_rect(self.logo_texture, make_rect(lx, lcy - ls / 2, ls, ls))
+        arcade.draw_text("ZASORA", lx + ls + 15 * self.scale_factor, lcy, arcade.color.WHITE, int(22 * self.scale_factor), self.font_path, "left", "center", True)
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\components\phone\zasora\__init__.py
+------------------------------------------------------------
+from .app import ZasoraApp
+from .commentPanel import CommentPanel
+from .header import ZasoraHeader
+
+__all__ = ["ZasoraApp", "CommentPanel", "ZasoraHeader"]
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\composables\__init__.py
+------------------------------------------------------------
+"""Composables module."""
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\composables\zasora\dataLoader.py
+------------------------------------------------------------
+import base64
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from src.shared.constants import DATA_DIR
+
+if TYPE_CHECKING:
+    from src.states.zasora import VideoInteractionState
+
+def _get_file_path() -> Path:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    filename = base64.b64encode(b"zasora_data").decode("utf-8")
+    return DATA_DIR / filename
+
+def load_interactions() -> dict[str, "VideoInteractionState"]:
+    from src.states.zasora import VideoInteractionState
+    file_path = _get_file_path()
+    interactions = {}
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                encoded_data = f.read()
+                decoded_data = base64.b64decode(encoded_data).decode("utf-8")
+                data = json.loads(decoded_data)
+                for k, v in data.items():
+                    interactions[k] = VideoInteractionState(
+                        likes=v.get("likes", 0),
+                        is_liked=v.get("is_liked", False),
+                        comments=v.get("comments", [])
+                    )
+        except Exception:
+            pass
+    return interactions
+
+def save_interactions(interactions: dict[str, "VideoInteractionState"]) -> None:
+    file_path = _get_file_path()
+    data = {
+        k: {
+            "likes": v.likes,
+            "is_liked": v.is_liked,
+            "comments": v.comments
+        }
+        for k, v in interactions.items()
+    }
+    try:
+        json_str = json.dumps(data, ensure_ascii=False)
+        encoded_data = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(encoded_data)
+    except Exception:
+        pass
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\composables\zasora\videoLoader.py
+------------------------------------------------------------
+from pathlib import Path
+import random
+
+
+def load_videos() -> tuple[list[Path], list[int]]:
+    video_dir = Path(__file__).parent.parent.parent.parent / "assets" / "video" / "zasora"
+    video_files = []
+    shuffled_order = []
+    if video_dir.exists():
+        video_files = list(video_dir.glob("*.webm")) + list(video_dir.glob("*.mp4"))
+        indices = list(range(len(video_files)))
+        random.shuffle(indices)
+        shuffled_order = indices
+    return video_files, shuffled_order
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\composables\zasora\__init__.py
+------------------------------------------------------------
+from .dataLoader import load_interactions, save_interactions
+from .videoLoader import load_videos
+
+__all__ = ["load_interactions", "save_interactions", "load_videos"]
 ------------------------------------------------------------
 
 ------------------------------------------------------------
@@ -1185,13 +1263,13 @@ SOUNDS_DIR = ASSETS_DIR / "sounds"
 VIDEO_DIR = ASSETS_DIR / "video"
 STORIES_DIR = ASSETS_DIR / "stories"
 MAPS_DIR = ASSETS_DIR / "maps"
+DATA_DIR = PROJECT_ROOT / "data"
 
 ATLAS_CONFIG_PATH = PROJECT_ROOT / "tools" / "atlas_config.json"
 
 SCREEN_WIDTH = 1920
 SCREEN_HEIGHT = 1080
 SCREEN_TITLE = "ZHOSKO"
-
 ------------------------------------------------------------
 
 ------------------------------------------------------------
@@ -1260,18 +1338,27 @@ class IAtlasConfig(Protocol):
 ------------------------------------------------------------
 FILE: src\shared\utils.py
 ------------------------------------------------------------
+from __future__ import annotations
 import orjson
-
+import arcade
 
 def load_json(path: str) -> dict:
     with open(path, "rb") as f:
         return orjson.loads(f.read())
 
-
 def save_json(path: str, data: dict) -> None:
     with open(path, "wb") as f:
         f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
 
+def make_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
+    return arcade.Rect(x, x + width, y, y + height, width, height, x + width / 2, y + height / 2)
+
+def make_centered_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
+    left = x - width / 2
+    right = x + width / 2
+    bottom = y - height / 2
+    top = y + height / 2
+    return arcade.Rect(left, right, bottom, top, width, height, x, y)
 ------------------------------------------------------------
 
 ------------------------------------------------------------
@@ -1373,264 +1460,266 @@ class PhoneData:
 ------------------------------------------------------------
 FILE: src\states\zasora.py
 ------------------------------------------------------------
-"""Zasora app state module."""
-
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from src.composables.zasora.dataLoader import load_interactions
+
+@dataclass
+class VideoInteractionState:
+    likes: int = 0
+    is_liked: bool = False
+    comments: list[dict[str, str]] = field(default_factory=list)
 
 @dataclass
 class ZasoraState:
-    """Zasora app state data class."""
-
     is_running: bool = False
     video_files: list[Path] = field(default_factory=list)
     shuffled_order: list[int] = field(default_factory=list)
     current_video_index: int = 0
-    videos_played: int = 0  # Count videos played in current cycle
+    videos_played: int = 0
+    phrases: dict[str, dict[str, str]] = field(default_factory=dict)
+    interactions: dict[str, VideoInteractionState] = field(default_factory=dict)
+    y_offset: float = 0.0
+    swipe_velocity: float = 0.0
+    show_comments: bool = False
+    is_paused: bool = False
+
+    def __post_init__(self) -> None:
+        from src.composables.zasora.dataLoader import load_interactions
+        from src.composables.zasora.videoLoader import load_videos
+        self.interactions = load_interactions()
+        self.video_files, self.shuffled_order = load_videos()
 
     def reset(self) -> None:
-        """Reset zasora state to initial."""
         self.is_running = False
         self.current_video_index = 0
         self.videos_played = 0
+        self.y_offset = 0.0
+        self.swipe_velocity = 0.0
+        self.show_comments = False
+        self.is_paused = False
 
     def next_video(self) -> int:
-        """Move to next video in shuffled order, loop when all played."""
         self.videos_played += 1
         self.current_video_index += 1
-
-        # If we've played all videos, start over with same shuffled order
         if self.current_video_index >= len(self.shuffled_order):
             self.current_video_index = 0
             self.videos_played = 0
+        self.show_comments = False
+        self.is_paused = False
+        return self.current_video_index
 
+    def prev_video(self) -> int:
+        if self.current_video_index > 0:
+            self.current_video_index -= 1
+            self.videos_played = max(0, self.videos_played - 1)
+        self.show_comments = False
+        self.is_paused = False
         return self.current_video_index
 
     def get_current_video(self) -> Path | None:
-        """Get current video path based on shuffled order."""
         if not self.video_files or not self.shuffled_order:
             return None
-
         actual_index = self.shuffled_order[self.current_video_index]
         if actual_index < len(self.video_files):
             return self.video_files[actual_index]
         return None
 
+    def get_video_by_offset(self, offset: int) -> Path | None:
+        if not self.video_files or not self.shuffled_order:
+            return None
+        idx = self.current_video_index + offset
+        if 0 <= idx < len(self.shuffled_order):
+            actual_index = self.shuffled_order[idx]
+            if actual_index < len(self.video_files):
+                return self.video_files[actual_index]
+        return None
+
+    def get_interaction(self, video_name: str) -> VideoInteractionState:
+        if video_name not in self.interactions:
+            self.interactions[video_name] = VideoInteractionState()
+        return self.interactions[video_name]
+
+    def save_interactions(self) -> None:
+        from src.composables.zasora.dataLoader import save_interactions
+        save_interactions(self.interactions)
 ------------------------------------------------------------
 
 ------------------------------------------------------------
 FILE: src\states\__init__.py
 ------------------------------------------------------------
-"""States module."""
-
 from .phone import PhoneData, PhoneState
-from .zasora import ZasoraState
+from .zasora import ZasoraState, VideoInteractionState
 
-__all__ = ["PhoneData", "PhoneState", "ZasoraState"]
+__all__ = ["PhoneData", "PhoneState", "ZasoraState", "VideoInteractionState"]
+------------------------------------------------------------
 
+------------------------------------------------------------
+FILE: src\ui\input.py
+------------------------------------------------------------
+from __future__ import annotations
+import arcade
+from src.shared.utils import make_rect
+
+class TextInput:
+    def __init__(self, x: float, y: float, width: float, height: float) -> None:
+        self.x, self.y, self.width, self.height, self.text, self.is_active = x, y, width, height, "", False
+
+    def draw(self) -> None:
+        color = arcade.color.WHITE if self.is_active else arcade.color.GRAY
+        arcade.draw_rect_outline(make_rect(self.x, self.y, self.width, self.height), color, 2)
+        arcade.draw_text(
+            self.text + ("_" if self.is_active else ""), 
+            self.x + 5, 
+            self.y + self.height/2, 
+            arcade.color.WHITE, 
+            anchor_y="center"
+        )
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\ui\shapes.py
+------------------------------------------------------------
+from __future__ import annotations
+from typing import Any
+import arcade
+from src.shared.utils import make_rect
+
+def draw_rounded_rect(
+    x: float, 
+    y: float, 
+    width: float, 
+    height: float, 
+    color: Any, 
+    corner_radius: float,
+    centered: bool = False
+) -> None:
+    bl_x = x - width / 2 if centered else x
+    bl_y = y - height / 2 if centered else y
+    
+    arcade.draw_rect_filled(make_rect(bl_x, bl_y, width, height), color)
+    radius = corner_radius
+    arcade.draw_circle_filled(bl_x + radius, bl_y + radius, radius, color)
+    arcade.draw_circle_filled(bl_x + width - radius, bl_y + radius, radius, color)
+    arcade.draw_circle_filled(bl_x + radius, bl_y + height - radius, radius, color)
+    arcade.draw_circle_filled(bl_x + width - radius, bl_y + height - radius, radius, color)
+    arcade.draw_rect_filled(make_rect(bl_x, bl_y + radius, radius, height - 2 * radius), color)
+    arcade.draw_rect_filled(make_rect(bl_x + width - radius, bl_y + radius, radius, height - 2 * radius), color)
+    arcade.draw_rect_filled(make_rect(bl_x + radius, bl_y, width - 2 * radius, radius), color)
+    arcade.draw_rect_filled(make_rect(bl_x + radius, bl_y + height - radius, width - 2 * radius, radius), color)
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: src\ui\text.py
+------------------------------------------------------------
+from __future__ import annotations
+from typing import Any
+import arcade
+
+def draw_wrapped_text(
+    text: str,
+    x: float,
+    y: float,
+    width: float,
+    font_size: int,
+    color: Any,
+    font_name: str,
+    line_spacing_factor: float = 1.3,
+    max_lines: int = 3
+) -> float:
+    words = text.split()
+    lines = []
+    current_line = ""
+    
+    for word in words:
+        test_line = f"{current_line} {word}".strip()
+        if len(test_line) * font_size * 0.6 > width:
+            if current_line:
+                lines.append(current_line)
+                current_line = word
+            else:
+                lines.append(test_line)
+                current_line = ""
+        else:
+            current_line = test_line
+    if current_line:
+        lines.append(current_line)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1][:int(width / (font_size * 0.6)) - 3] + "..."
+
+    curr_y = y
+    for line in lines:
+        arcade.draw_text(
+            line, 
+            x, 
+            curr_y, 
+            color, 
+            font_size=font_size, 
+            font_name=font_name, 
+            anchor_x="left", 
+            anchor_y="top"
+        )
+        curr_y -= font_size * line_spacing_factor
+    
+    return len(lines) * (font_size * line_spacing_factor)
 ------------------------------------------------------------
 
 ------------------------------------------------------------
 FILE: src\ui\__init__.py
 ------------------------------------------------------------
+from .shapes import draw_rounded_rect
+from .text import draw_wrapped_text
+from .input import TextInput
 
+__all__ = ["draw_rounded_rect", "draw_wrapped_text", "TextInput"]
 ------------------------------------------------------------
 
 ------------------------------------------------------------
 FILE: src\ui\phone\icons.py
 ------------------------------------------------------------
-"""App icon UI component."""
-
 from __future__ import annotations
-
+from typing import Any
 import arcade
-
-
-def _make_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
-    """Create arcade.Rect from x, y, width, height (x, y is bottom-left corner)."""
-    return arcade.Rect(x, x + width, y, y + height, width, height, x + width / 2, y + height / 2)
-
-
-def _make_centered_rect(x: float, y: float, width: float, height: float) -> arcade.Rect:
-    """Create arcade.Rect from center x, y and width, height."""
-    left = x - width / 2
-    right = x + width / 2
-    bottom = y - height / 2
-    top = y + height / 2
-    return arcade.Rect(left, right, bottom, top, width, height, x, y)
-
+from src.shared.utils import make_rect
+from src.ui.shapes import draw_rounded_rect
 
 class AppIcon:
-    """App icon component with rounded square background."""
-
-    def __init__(
-        self,
-        texture: arcade.Texture | None,
-        label: str,
-        x: float,
-        y: float,
-        size: float = 40.0,
-        scale: float = 1.0,
-        font_name: str | None = None,
-    ) -> None:
-        """
-        Initialize app icon.
-
-        Args:
-            texture: Icon texture (drawn over black rounded square background)
-            label: Text label below icon
-            x: X position (center)
-            y: Y position (center of icon, not including label)
-            size: Icon size in pixels
-            scale: Scale factor
-            font_name: Font name for label
-        """
-        self.texture = texture
-        self.label = label
-        self.x = x
-        self.y = y
-        self.size = size * scale
-        self.scale = scale
-        self.font_name = font_name
-
-        # Text height below icon
+    def __init__(self, texture: arcade.Texture | None, label: str, x: float, y: float, size: float = 40.0, scale: float = 1.0, font_name: str | None = None) -> None:
+        self.texture, self.label, self.x, self.y, self.size, self.scale, self.font_name = texture, label, x, y, size * scale, scale, font_name
         self.text_height = 20 * scale
 
     def draw(self) -> None:
-        """Draw the app icon."""
-        # Draw black rounded square background (x, y is center)
-        self._draw_rounded_rect_filled(
-            self.x, self.y, self.size, self.size,
-            arcade.color.BLACK,
-            corner_radius=self.size * 0.2,  # 20% rounded corners
-        )
-
-        # Draw icon texture (75% of square size, centered)
+        draw_rounded_rect(self.x, self.y, self.size, self.size, arcade.color.BLACK, self.size * 0.2, centered=True)
         if self.texture:
-            texture_size = self.size * 0.75
-            texture_offset = (self.size - texture_size) / 2
-            arcade.draw_texture_rect(
-                self.texture,
-                _make_rect(
-                    self.x - self.size / 2 + texture_offset,
-                    self.y - self.size / 2 + texture_offset,
-                    texture_size,
-                    texture_size,
-                ),
-            )
-
-        # Draw label (immediately below icon, max 20px height, truncate with dots if needed)
+            ts = self.size * 0.75
+            arcade.draw_texture_rect(self.texture, make_rect(self.x - ts / 2, self.y - ts / 2, ts, ts))
         if self.label:
-            font_size = int(10 * self.scale)  # Smaller font size
-            label_y = self.y - self.size / 2 - font_size  # Start immediately below icon
-
-            # Truncate label if it doesn't fit
-            display_label = self._truncate_label(
-                self.label, self.size, self.font_name or "calibri", font_size, self.text_height
-            )
-
+            fs = int(10 * self.scale)
+            l = self.label if len(self.label) <= int(self.size/(fs*0.45)) else self.label[:int(self.size/(fs*0.45))-3]+"..."
             arcade.draw_text(
-                display_label,
-                self.x,
-                label_y,
-                arcade.color.WHITE,
-                font_size=font_size,
-                font_name=self.font_name or "calibri",
-                anchor_x="center",
-                anchor_y="top",
+                l, 
+                self.x, 
+                self.y - self.size/2 - fs, 
+                arcade.color.WHITE, 
+                font_size=fs, 
+                font_name=self.font_name or "calibri", 
+                anchor_x="center", 
+                anchor_y="top"
             )
-
-    def _truncate_label(
-        self,
-        label: str,
-        available_width: float,
-        font_name: str,
-        font_size: int,
-        max_height: float,
-    ) -> str:
-        """Truncate label with dots if it doesn't fit in available space."""
-        # Simple truncation: if text is too long, cut it and add dots
-        # Use smaller multiplier to allow more characters (0.45 instead of 0.6)
-        max_chars = int(available_width / (font_size * 0.45))
-        if len(label) > max_chars:
-            return label[:max_chars - 3] + "..."
-        return label
-
-    def _draw_rounded_rect_filled(
-        self,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        color: tuple[int, int, int],
-        corner_radius: float,
-    ) -> None:
-        """Draw a filled rounded rectangle (x, y is center)."""
-        # Convert center to bottom-left
-        bl_x = x - width / 2
-        bl_y = y - height / 2
-
-        # Draw main rectangle
-        arcade.draw_rect_filled(
-            _make_rect(bl_x, bl_y, width, height),
-            color,
-        )
-
-        # Draw corner circles
-        radius = corner_radius
-        # Bottom-left
-        arcade.draw_circle_filled(
-            bl_x + radius, bl_y + radius, radius, color
-        )
-        # Bottom-right
-        arcade.draw_circle_filled(
-            bl_x + width - radius, bl_y + radius, radius, color
-        )
-        # Top-left
-        arcade.draw_circle_filled(
-            bl_x + radius, bl_y + height - radius, radius, color
-        )
-        # Top-right
-        arcade.draw_circle_filled(
-            bl_x + width - radius, bl_y + height - radius, radius, color
-        )
-
-        # Draw side rectangles to fill gaps
-        # Left
-        arcade.draw_rect_filled(
-            _make_rect(bl_x, bl_y + radius, radius, height - 2 * radius),
-            color,
-        )
-        # Right
-        arcade.draw_rect_filled(
-            _make_rect(bl_x + width - radius, bl_y + radius, radius, height - 2 * radius),
-            color,
-        )
-        # Bottom
-        arcade.draw_rect_filled(
-            _make_rect(bl_x + radius, bl_y, width - 2 * radius, radius),
-            color,
-        )
-        # Top
-        arcade.draw_rect_filled(
-            _make_rect(bl_x + radius, bl_y + height - radius, width - 2 * radius, radius),
-            color,
-        )
-
 ------------------------------------------------------------
 
 ------------------------------------------------------------
 FILE: src\ui\phone\__init__.py
 ------------------------------------------------------------
-"""Phone UI components module."""
-
 from .icons import AppIcon
 
 __all__ = ["AppIcon"]
-
 ------------------------------------------------------------
 
 ------------------------------------------------------------
@@ -1851,19 +1940,14 @@ build-backend = "hatchling.build"
 FILE: D:/projects/ZHOSKO/main.py
 ------------------------------------------------------------
 from pathlib import Path
-
 import arcade
-
 from src.components.phone import Phone
 from src.core.asset_manager import AssetManager
 from src.shared.constants import SCREEN_HEIGHT, SCREEN_TITLE, SCREEN_WIDTH
 
-
 class GameWindow(arcade.Window):
-    """Test window for phone component."""
-
     def __init__(self) -> None:
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE, resizable=True)
         arcade.set_background_color(arcade.color.BLACK)
 
         project_root = Path(__file__).parent
@@ -1873,52 +1957,74 @@ class GameWindow(arcade.Window):
         images_output = assets_root / "images"
         self.asset_manager.load_all_atlases(images_output)
 
-        # Initialize phone component
         self.phone = Phone(self.asset_manager)
-
-        # Schedule update at 60 FPS
         arcade.schedule(self.update, 1/60)
 
+    def on_resize(self, width: int, height: int) -> None:
+        super().on_resize(width, height)
+        self.phone.resize(width, height)
+
     def on_draw(self) -> None:
-        """Render the window."""
         self.clear()
         self.phone.draw()
 
-    def on_mouse_press(
-        self,
-        x: float,
-        y: float,
-        button: int,
-        modifiers: int,
-    ) -> None:
-        """Handle mouse press events."""
+    def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> None:
         self.phone.on_mouse_press(x, y, button, modifiers)
 
-    def on_mouse_release(
-        self,
-        x: float,
-        y: float,
-        button: int,
-        modifiers: int,
-    ) -> None:
-        """Handle mouse release events."""
+    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> None:
         self.phone.on_mouse_release(x, y, button, modifiers)
+        
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> None:
+        self.phone.on_mouse_motion(x, y, dx, dy)
 
     def update(self, delta_time: float) -> None:
-        """Update game state."""
         self.phone.update(delta_time)
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
-        """Handle key press events."""
-        if symbol == arcade.key.ESCAPE:
-            self.close()
+        if symbol == arcade.key.F11:
+            self.set_fullscreen(not self.fullscreen)
+        self.phone.on_key_press(symbol, modifiers)
 
+    def on_text(self, text: str) -> None:
+        self.phone.on_text(text)
 
 def main() -> None:
-    """Main entry point."""
     window = GameWindow()
     arcade.run()
 
+if __name__ == "__main__":
+    main()
+------------------------------------------------------------
+
+------------------------------------------------------------
+FILE: D:/projects/ZHOSKO/pix.py
+------------------------------------------------------------
+import os
+import argparse
+import subprocess
+
+def main():
+    parser = argparse.ArgumentParser(description="Pixelizer for game videos")
+    parser.add_argument("-i", "--input", required=True, help="Input filename in assets/video/raw/")
+    parser.add_argument("-o", "--output", required=True, help="Output filename in assets/video/")
+    parser.add_argument("-s", "--scale", type=int, default=4, help="Pixel scale (default: 4)")
+    
+    args = parser.parse_args()
+
+    raw_path = os.path.join("assets", "video", "raw", args.input)
+    out_path = os.path.join("assets", "video", "zasora", args.output)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    command = [
+        "ffmpeg", "-i", raw_path,
+        "-vf", f"scale=iw/{args.scale}:-1:flags=neighbor,scale=iw*{args.scale}:-1:flags=neighbor",
+        "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
+        "-c:a", "libopus", "-b:a", "128k",
+        out_path, "-y"
+    ]
+
+    print(f"Обработка: {raw_path} -> {out_path} (Scale: {args.scale})")
+    subprocess.run(command)
 
 if __name__ == "__main__":
     main()

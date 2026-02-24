@@ -34,6 +34,12 @@
       "add_txt": true,
       "use_full_path": true,
       "allow_merge": true
+    },
+    {
+      "path": "D:/projects/ZHOSKO/pix.py",
+      "add_txt": true,
+      "use_full_path": true,
+      "allow_merge": true
     }
   ],
   "forced_excludes": [],

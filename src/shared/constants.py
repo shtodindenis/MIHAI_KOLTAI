@@ -8,6 +8,7 @@ SOUNDS_DIR = ASSETS_DIR / "sounds"
 VIDEO_DIR = ASSETS_DIR / "video"
 STORIES_DIR = ASSETS_DIR / "stories"
 MAPS_DIR = ASSETS_DIR / "maps"
+DATA_DIR = PROJECT_ROOT / "data"
 
 ATLAS_CONFIG_PATH = PROJECT_ROOT / "tools" / "atlas_config.json"
 

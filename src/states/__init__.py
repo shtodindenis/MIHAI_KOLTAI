@@ -1,6 +1,5 @@
-"""States module."""
-
 from .phone import PhoneData, PhoneState
-from .zasora import ZasoraState
+from .zasora import ZasoraState, VideoInteractionState
+from .calc import CalcState
 
-__all__ = ["PhoneData", "PhoneState", "ZasoraState"]
+__all__ = ["PhoneData", "PhoneState", "ZasoraState", "VideoInteractionState", "CalcState"]
